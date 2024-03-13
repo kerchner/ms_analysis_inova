@@ -1,0 +1,82 @@
+---
+title: "Infant Metabolome Analysis"
+subtitle: "INOVA Data Set"
+author: "Dan Kerchner"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#devtools::install_github("himelmallick/Tweedieverse")
+#devtools::install_version("statmod", version = "1.4.33", repos ="http://cran.us.r-project.org")
+#devtools::install_version("cplm", version = "0.7-8", repos = "http://cran.us.r-project.org")
+library(dplyr)
+library(Tweedieverse)
+```
+
+# Load data 
+```{r}
+metadata_df <- read.csv('data/cleaned/infant_metadata_v2.csv')
+metabolite_df <- read.delim('data/infant_metabolite.txt')
+```
+
+# Reformat data frames 
+
+```{r}
+# Just take the first sample from each child
+metadata_df <- metadata_df %>%
+  filter(!endsWith(Sample_ID, 'b')) %>%
+  filter(!endsWith(Sample_ID, 'c')) %>%
+  filter(!endsWith(Sample_ID, 'd'))
+
+
+metadata_df <- metadata_df %>%
+  mutate(Sample_ID = paste0('X', Sample_ID))
+
+rownames(metadata_df) <- metadata_df$Sample_ID
+metadata_df <- metadata_df %>%
+  select(-Sample_ID, -External_ID)
+
+rownames(metabolite_df) <- metabolite_df$X
+metabolite_df <- metabolite_df %>%
+  select(-X)
+
+```
+
+
+# Tweedieverse
+
+```{r}
+
+dir.create('results', showWarnings = FALSE)
+Tweedieverse(input_features = metabolite_df,
+             input_metadata = metadata_df,
+             output = 'results',
+             base_model = "CPLM")
+```
+
+```{r}
+#if(!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+BiocManager::install("Maaslin2")
+```
+
+```{r}
+library(Maaslin2)
+
+metabolite_tsv_filename = 'metabolite_df.tsv'
+metadata_tsv_filename = 'metadata_df.tsv'
+write.table(metabolite_df, file=metabolite_tsv_filename, sep='\t')
+write.table(metadata_df, file=metadata_tsv_filename, sep='\t')
+
+fit_data = Maaslin2(
+    input_data = metabolite_tsv_filename, 
+    input_metadata = metadata_tsv_filename, 
+    output = "results")# , 
+  #  fixed_effects = c("diagnosis", "dysbiosis"))
+```
+

@@ -11,11 +11,15 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-#devtools::install_github("himelmallick/Tweedieverse")
-#devtools::install_version("statmod", version = "1.4.33", repos ="http://cran.us.r-project.org")
-#devtools::install_version("cplm", version = "0.7-8", repos = "http://cran.us.r-project.org")
+# devtools::install_github("himelmallick/Tweedieverse")
+# devtools::install_version("statmod", version = "1.4.33", repos ="http://cran.us.r-project.org")
+# devtools::install_version("cplm", version = "0.7-8", repos = "http://cran.us.r-project.org")
+# devtools::install_github('omicsEye/omicsArt', force = TRUE)
 library(dplyr)
 library(Tweedieverse)
+library(ggplot2)
+library(omicsArt)
+library(cowplot)
 ```
 
 # Load data 
@@ -54,8 +58,10 @@ metabolite_df <- metabolite_df %>%
 
 dir.create('results', showWarnings = FALSE)
 Tweedieverse(input_features = metabolite_df,
-             input_metadata = metadata_df,
+             input_metadata = metadata_df %>% select(Gender_of_child),
              output = 'results',
+             plot_scatter = TRUE,
+             plot_heatmap = TRUE,
              base_model = "CPLM")
 ```
 

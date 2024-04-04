@@ -15,74 +15,130 @@ knitr::opts_chunk$set(echo = TRUE)
 # devtools::install_version("statmod", version = "1.4.33", repos ="http://cran.us.r-project.org")
 # devtools::install_version("cplm", version = "0.7-8", repos = "http://cran.us.r-project.org")
 # devtools::install_github('omicsEye/omicsArt', force = TRUE)
+library(tibble)
 library(dplyr)
+library(readr)
 library(Tweedieverse)
 library(ggplot2)
 library(omicsArt)
 library(cowplot)
+library(Maaslin2)
 ```
 
 # Load data 
 ```{r}
-metadata_df <- read.csv('data/cleaned/infant_metadata_v2.csv')
-metabolite_df <- read.delim('data/infant_metabolite.txt')
+metadata_raw_df <- read.csv('data/cleaned/infant_metadata_v2.csv')
+metadata_mother_raw_df <- read.csv('data/cleaned/mother_metadata_v2.csv')
+metabolite_df <- read.delim('data/infant_metabolite.txt',
+                            check.names = TRUE) # Do repair column names
+microbiome_df <- read.delim('data/infant_microbiome.txt',
+                            check.names = TRUE) # Do repair column names
+```
+# How many observations per External_ID?
+
+```{r}
+obs_counts <- metadata_raw_df %>%
+  count(External_ID) %>%
+  rename(n_count = n)
+
+at_least_df <- data.frame()
+for (i in 1:4) {
+  at_least_row <- data.frame(n = i, n_at_least = sum(obs_counts$n_count >= i))
+  at_least_df <- rbind(at_least_df, at_least_row)
+}
+
+ggplot(at_least_df) +
+  geom_col(aes(y= n_at_least, x = n))
+
 ```
 
 # Reformat data frames 
 
 ```{r}
-# Just take the first sample from each child
-metadata_df <- metadata_df %>%
-  filter(!endsWith(Sample_ID, 'b')) %>%
-  filter(!endsWith(Sample_ID, 'c')) %>%
-  filter(!endsWith(Sample_ID, 'd'))
+metadata_df <- metadata_raw_df
+metadata_mother_df <- metadata_mother_raw_df
+colnames(metadata_mother_df) <- paste0('mother_', colnames(metadata_mother_df))
+metadata_mother_df <- metadata_mother_df %>%
+  rename(External_ID = mother_External_ID)
+metadata_all_df <- left_join(metadata_df, metadata_mother_df)
+
+# Set to TRUE to take only the first sample from each child
+EXCLUDE_MULTI_SAMPLES <- FALSE
+
+if (EXCLUDE_MULTI_SAMPLES) {
+  metadata_df <- metadata_df %>%
+    filter(!endsWith(Sample_ID, 'b')) %>%
+    filter(!endsWith(Sample_ID, 'c')) %>%
+    filter(!endsWith(Sample_ID, 'd'))
+}
 
 
-metadata_df <- metadata_df %>%
+metadata_all_df <- metadata_all_df %>%
   mutate(Sample_ID = paste0('X', Sample_ID))
 
-rownames(metadata_df) <- metadata_df$Sample_ID
-metadata_df <- metadata_df %>%
-  select(-Sample_ID, -External_ID)
+rownames(metadata_all_df) <- metadata_all_df$Sample_ID
+metadata_all_df <- metadata_all_df %>%
+  select(-Sample_ID)
 
-rownames(metabolite_df) <- metabolite_df$X
+rownames(metabolite_df) <- make.names(metabolite_df$X)
 metabolite_df <- metabolite_df %>%
   select(-X)
 
-```
+rownames(microbiome_df) <- microbiome_df$X
+microbiome_df <- microbiome_df %>%
+  select(-X)
 
+```
+# Merge in outlier categories
+```{r}
+metadata_all_df <- metadata_all_df %>%
+  mutate(mother_BMI.category = if_else(mother_BMI.category <= 3,
+                                       mother_BMI.category,
+                                       3))
+
+metadata_all_df$mother_BMI.category <- factor(metadata_all_df$mother_BMI.category,
+                                              ordered = TRUE)
+```
 
 # Tweedieverse
 
 ```{r}
 
 dir.create('results', showWarnings = FALSE)
-Tweedieverse(input_features = metabolite_df,
-             input_metadata = metadata_df %>% select(Gender_of_child),
-             output = 'results',
+Tweedieverse(input_features = microbiome_df,
+             input_metadata = metadata_all_df %>%
+               select(mother_GDM, mother_Age, mother_BMI.category), 
+             fixed_effects = c('mother_GDM', 'mother_Age', 'mother_BMI.category'),
+             random_effects = c('External_ID'),
+             output = 'results_microbiome_mixed_model_1',
              plot_scatter = TRUE,
              plot_heatmap = TRUE,
-             base_model = "CPLM")
+             base_model = "CPLM",
+             cores = 1)
 ```
+```{r}
+significant_results_metabolite_df <- read.delim('results_metabolite_mixed_model_1/significant_results.tsv')
+```
+
 
 ```{r}
 #if(!requireNamespace("BiocManager", quietly = TRUE))
 #    install.packages("BiocManager")
-BiocManager::install("Maaslin2")
+# BiocManager::install("Maaslin2")
 ```
 
 ```{r}
-library(Maaslin2)
-
-metabolite_tsv_filename = 'metabolite_df.tsv'
-metadata_tsv_filename = 'metadata_df.tsv'
-write.table(metabolite_df, file=metabolite_tsv_filename, sep='\t')
-write.table(metadata_df, file=metadata_tsv_filename, sep='\t')
-
-fit_data = Maaslin2(
-    input_data = metabolite_tsv_filename, 
-    input_metadata = metadata_tsv_filename, 
-    output = "results")# , 
-  #  fixed_effects = c("diagnosis", "dysbiosis"))
+# library(Maaslin2)
+# 
+# metabolite_tsv_filename = 'metabolite_df.tsv'
+# metadata_tsv_filename = 'metadata_df.tsv'
+# write.table(metabolite_df, file=metabolite_tsv_filename, sep='\t')
+# write.table(metadata_df, file=metadata_tsv_filename, sep='\t')
+# 
+# fit_data = Maaslin2(
+#     input_data = metabolite_tsv_filename, 
+#     input_metadata = metadata_tsv_filename, 
+#     output = "results")# , 
+#   #  fixed_effects = c("diagnosis", "dysbiosis"))
 ```
 

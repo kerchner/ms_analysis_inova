@@ -1,5 +1,5 @@
 ---
-title: "Infant Metabolome Analysis"
+title: "Mother/Infant Metabolome & Microbiome Analysis"
 subtitle: "INOVA Data Set"
 author: "Dan Kerchner"
 date: "`r Sys.Date()`"
@@ -11,10 +11,11 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-# devtools::install_github("himelmallick/Tweedieverse")
-# devtools::install_version("statmod", version = "1.4.33", repos ="http://cran.us.r-project.org")
-# devtools::install_version("cplm", version = "0.7-8", repos = "http://cran.us.r-project.org")
-# devtools::install_github('omicsEye/omicsArt', force = TRUE)
+#devtools::install_github("himelmallick/Tweedieverse")
+library(Tweedieverse)
+#devtools::install_version("statmod", version = "1.4.33", repos ="http://cran.us.r-project.org")
+#devtools::install_version("cplm", version = "0.7-12", repos = "http://cran.us.r-project.org")
+#devtools::install_github('omicsEye/omicsArt', force = TRUE)
 library(tibble)
 library(dplyr)
 library(readr)
@@ -22,22 +23,27 @@ library(Tweedieverse)
 library(ggplot2)
 library(omicsArt)
 library(cowplot)
-library(Maaslin2)
+library(vegan)
+library(ggcorrplot)
+#library(Maaslin2)
 ```
 
 # Load data 
 ```{r}
-metadata_raw_df <- read.csv('data/cleaned/infant_metadata_v2.csv')
+metadata_infant_raw_df <- read.csv('data/cleaned/infant_metadata_v2.csv')
 metadata_mother_raw_df <- read.csv('data/cleaned/mother_metadata_v2.csv')
-metabolite_df <- read.delim('data/infant_metabolite.txt',
-                            check.names = TRUE) # Do repair column names
-microbiome_df <- read.delim('data/infant_microbiome.txt',
-                            check.names = TRUE) # Do repair column names
+
+metabolite_infant_df <- read.delim('data/infant_metabolite.txt',
+                            check.names = TRUE) # Repair column names
+microbiome_infant_df <- read.delim('data/infant_microbiome.tsv',
+                            check.names = TRUE) # Repair column names
+microbiome_mother_df <- read.delim('data/breastmilk_microbiome.tsv',
+                            check.names = TRUE) # Repair column names
 ```
 # How many observations per External_ID?
 
 ```{r}
-obs_counts <- metadata_raw_df %>%
+obs_counts <- metadata_infant_raw_df %>%
   count(External_ID) %>%
   rename(n_count = n)
 
@@ -55,23 +61,53 @@ ggplot(at_least_df) +
 # Reformat data frames 
 
 ```{r}
-metadata_df <- metadata_raw_df
+metadata_infant_df <- metadata_infant_raw_df
 metadata_mother_df <- metadata_mother_raw_df
 colnames(metadata_mother_df) <- paste0('mother_', colnames(metadata_mother_df))
-metadata_mother_df <- metadata_mother_df %>%
+metadata_mother_df <- metadata_mother_df %>% # rename BACK to External_ID (no mother_)
   rename(External_ID = mother_External_ID)
-metadata_all_df <- left_join(metadata_df, metadata_mother_df)
+
+# Repair BMI category
+
+# BMI.category needs repair.  Use this:
+# 0) underweight (BMI < 18.5), 1) normal (BMI 18.5 - 24.9), 2) obese (BMI 25 - 29.9), 3) morbid obese (BMI >30)
+
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_BMI.category = case_when(#mother_BMI < 18.5 ~ "underweight",
+                                         mother_BMI < 25 ~ "underweight/normal",
+                                         mother_BMI < 30 ~ "obese",
+                                         mother_BMI >= 30 ~ "morbid obese",
+                                         TRUE ~ as.character(NA)))
+
+metadata_mother_df$mother_BMI.category <- factor(metadata_mother_df$mother_BMI.category,
+                                        levels = c("underweight/normal", "obese", "morbid obese"),
+                                        labels = c("underweight/normal", "obese", "morbid obese"))
+
+metadata_mother_df$mother_GDM <- factor(metadata_mother_df$mother_GDM,
+                                        levels = c('No', 'Yes'),
+                                        labels = c('No', 'Yes'))
+
+metadata_infant_df <- metadata_infant_df %>%
+  mutate(Gestational_age_at_birth_weeks_exact =
+           Gestational_age_at_birth_week + Gestational_age_at_birth_day/7)
+
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_Parity_before = mother_Parity..after.delivery. - 1)
+
+metadata_all_df <- left_join(metadata_infant_df, metadata_mother_df)
 
 # Set to TRUE to take only the first sample from each child
 EXCLUDE_MULTI_SAMPLES <- FALSE
 
 if (EXCLUDE_MULTI_SAMPLES) {
-  metadata_df <- metadata_df %>%
+  metadata_infant_df <- metadata_infant_df %>%
     filter(!endsWith(Sample_ID, 'b')) %>%
     filter(!endsWith(Sample_ID, 'c')) %>%
     filter(!endsWith(Sample_ID, 'd'))
 }
 
+
+# Fix metadata IDs
 
 metadata_all_df <- metadata_all_df %>%
   mutate(Sample_ID = paste0('X', Sample_ID))
@@ -80,45 +116,587 @@ rownames(metadata_all_df) <- metadata_all_df$Sample_ID
 metadata_all_df <- metadata_all_df %>%
   select(-Sample_ID)
 
-rownames(metabolite_df) <- make.names(metabolite_df$X)
-metabolite_df <- metabolite_df %>%
+# Fix omics IDs
+clean_names <- make.names(metabolite_infant_df$X)
+metabolite_name_ref <- data.frame(clean_name = clean_names, metabolite_name = metabolite_infant_df$X)
+
+rownames(metabolite_infant_df) <- make.names(metabolite_infant_df$X)
+metabolite_infant_df <- metabolite_infant_df %>%
   select(-X)
 
-rownames(microbiome_df) <- microbiome_df$X
-microbiome_df <- microbiome_df %>%
+rownames(microbiome_infant_df) <- microbiome_infant_df$X
+microbiome_infant_df <- microbiome_infant_df %>%
+  select(-X)
+
+rownames(microbiome_mother_df) <- microbiome_mother_df$X
+microbiome_mother_df <- microbiome_mother_df %>%
   select(-X)
 
 ```
-# Merge in outlier categories
+
+# Correlations among GDM and confounders
+
+## BMI Category
+
 ```{r}
-metadata_all_df <- metadata_all_df %>%
-  mutate(mother_BMI.category = if_else(mother_BMI.category <= 3,
-                                       mother_BMI.category,
-                                       3))
-
-metadata_all_df$mother_BMI.category <- factor(metadata_all_df$mother_BMI.category,
-                                              ordered = TRUE)
+gdm_bmi_cat_tab <- table(metadata_mother_df$mother_BMI.category,
+                         metadata_mother_df$mother_GDM)
+gdm_bmi_cat_tab
+chisq.test(gdm_bmi_cat_tab)  
 ```
+```{r}
+gdm_bmi_model <- glm(mother_GDM ~ mother_BMI.category, data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_bmi_model)
+
+# convert to confidence interval to show that our study is very underpowered
+```
+## Age
+
+```{r}
+gdm_age_model <- glm(mother_GDM ~ mother_Age, data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_age_model)
+
+# convert to categories
+metadata_mother_df %>%
+  ggplot() +
+  geom_histogram(aes(x = mother_Age),
+                 binwidth = 1, color = 'white')
+
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_Age.category = case_when(mother_Age < 30 ~ "under 30",
+                                       mother_Age >= 30 ~ "30+",
+                                       TRUE ~ as.character(NA)))
+
+table(metadata_mother_df$mother_Age.category, metadata_mother_df$mother_GDM, useNA = 'always')
+
+gdm_age_model2 <- glm(mother_GDM ~ mother_Age.category, data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_age_model2)
+# Do confidence interval for OR
+```
+## Smoking
+
+```{r}
+gdm_smoking_tab <- table(metadata_mother_df$mother_Maternal.smoking,
+                         metadata_mother_df$mother_GDM)
+gdm_smoking_tab
+chisq.test(gdm_smoking_tab)  
+```
+```{r}
+gdm_smoking_model <- glm(mother_GDM ~ mother_Maternal.smoking, data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_smoking_model)
+
+# convert to confidence interval to show that our study is very underpowered
+```
+## Hypertension
+
+```{r}
+gdm_htn_tab <- table(htn = metadata_mother_df$mother_Hypertensive.Disorder..PIH..preeclampsia..HELLP.,
+                         gdm = metadata_mother_df$mother_GDM)
+gdm_htn_tab
+chisq.test(gdm_htn_tab)  
+
+```
+```{r}
+gdm_htn_model <- glm(mother_GDM ~ mother_Hypertensive.Disorder..PIH..preeclampsia..HELLP., data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_htn_model)
+
+# convert to confidence interval to show that our study is very underpowered
+```
+## Gravidity
+
+```{r}
+gdm_gravidity_model <- glm(mother_GDM ~ mother_Gravidity, data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_gravidity_model)
+
+```
+## Parity
+
+```{r}
+gdm_parity_model <- glm(mother_GDM ~ mother_Parity_before, data = metadata_mother_df,
+                     family = 'binomial')
+summary(gdm_parity_model)
+
+```
+
+## Gender of child
+
+```{r}
+# Need to make a temporary df
+gender_gdm_df <- left_join(metadata_mother_df %>% select(External_ID, mother_GDM),
+                           metadata_infant_df %>% select(External_ID, Gender_of_child))
+
+gdm_gender_tab <- table(gender = gender_gdm_df$Gender_of_child,
+                        gdm = gender_gdm_df$mother_GDM)
+gdm_gender_tab
+chisq.test(gdm_gender_tab)  
+```
+```{r}
+gdm_gender_model <- glm(mother_GDM ~ Gender_of_child, data = gender_gdm_df,
+                     family = 'binomial')
+summary(gdm_gender_model)
+
+# convert to confidence interval to show that our study is very underpowered
+```
+
 
 # Tweedieverse
 
 ```{r}
 
 dir.create('results', showWarnings = FALSE)
-Tweedieverse(input_features = microbiome_df,
+```
+
+## Microbiome, univariate mixed model
+```{r}
+Tweedieverse(input_features = microbiome_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(mother_GDM, External_ID), 
+             fixed_effects = c('mother_GDM'), 
+             random_effects = c('External_ID'),
+             output = 'results_microbiome_univariate_1_28_Apr2024',
+             #prev_threshold = 0,
+             #cutoff_ZSCP = 0.1,
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+## Microbiome, adjusted mixed model w/Age
+
+```{r}
+Tweedieverse(input_features = microbiome_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_Age), 
+             fixed_effects = c('mother_GDM', 'mother_Age'), 
+             random_effects = c('External_ID'),
+             output = 'results_microbiome_mixed_model_Age_28Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+## Microbiome, adjusted mixed model w/BMI
+
+```{r}
+Tweedieverse(input_features = microbiome_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_BMI.category), 
+             fixed_effects = c('mother_GDM', 'mother_BMI.category'), 
+             random_effects = c('External_ID'),
+             output = 'results_microbiome_mixed_model_BMI_28Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+
+## Microbiome, adjusted mixed model w/infant gender
+
+```{r}
+Tweedieverse(input_features = microbiome_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_Age, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'Gender_of_child'), 
+             random_effects = c('External_ID'),
+             output = 'results_microbiome_mixed_model_gender_28Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+
+## Microbiome, adjusted mixed model w/Age + BMI + gender of child
+
+```{r}
+Tweedieverse(input_features = microbiome_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_Age, mother_BMI.category, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'mother_Age', 'mother_BMI.category', 'Gender_of_child'), 
+             random_effects = c('External_ID'),
+             output = 'results_microbiome_mixed_model_1_28Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+
+## Metabolite, univariate mixed model
+
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(mother_GDM, External_ID),
+             fixed_effects = c('mother_GDM'), 
+             random_effects = c('External_ID'),
+             output = 'results_metabolite_univariate_1_28_Apr2024',
+             #prev_threshold = 0,
+             #cutoff_ZSCP = 0.1,
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+## Metabolite, adjusted mixed model w/Age
+
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_Age), 
+             fixed_effects = c('mother_GDM', 'mother_Age'),
+             random_effects = c('External_ID'),
+             output = 'results_metabolite_mixed_model_Age_28_Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+## Metabolite, adjusted mixed model w/BMI
+
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_BMI.category), 
+             fixed_effects = c('mother_GDM', 'mother_BMI.category'),
+             random_effects = c('External_ID'),
+             output = 'results_metabolite_mixed_model_BMI_28_Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+
+## Metabolite, adjusted mixed model w/Gender
+
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'Gender_of_child'),
+             random_effects = c('External_ID'),
+             output = 'results_metabolite_mixed_model_Gender_28_Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+
+## Metabolite, adjusted mixed model
+
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_Age, mother_BMI.category, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'mother_Age', 'mother_BMI.category', 'Gender_of_child'),
+             random_effects = c('External_ID'),
+             output = 'results_metabolite_mixed_model_1_28_Apr2024',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             cores = 4)
+```
+
+
+
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
              input_metadata = metadata_all_df %>%
                select(mother_GDM, mother_Age, mother_BMI.category), 
-             fixed_effects = c('mother_GDM', 'mother_Age', 'mother_BMI.category'),
-             random_effects = c('External_ID'),
-             output = 'results_microbiome_mixed_model_1',
-             plot_scatter = TRUE,
-             plot_heatmap = TRUE,
+             output = 'results_metabolite_univariate_1_28_Apr2024',
+             #prev_threshold = 0,
+             #cutoff_ZSCP = 0.1,
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
              base_model = "CPLM",
-             cores = 1)
+             cores = 4)
 ```
+
+# Comparing univariate models vs. mixed models
+
 ```{r}
-significant_results_metabolite_df <- read.delim('results_metabolite_mixed_model_1/significant_results.tsv')
+significant_results_microbiome_mm_df <- read.delim('results_microbiome_mixed_model_1_28Apr2024/significant_results.tsv')
+significant_results_microbiome_uv_df <- read.delim('results_microbiome_univariate_1_28_Apr2024/significant_results.tsv')
+all_results_microbiome_mm_df <- read.delim('results_microbiome_mixed_model_1_28Apr2024/all_results.tsv')
+all_results_microbiome_uv_df <- read.delim('results_microbiome_univariate_1_28_Apr2024/all_results.tsv')
+
+significant_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_28_Apr2024/significant_results.tsv') 
+significant_results_metabolite_mm_df2 <-
+  left_join(significant_results_metabolite_mm_df,
+            metabolite_name_ref,
+            by = c("feature" = "clean_name"))
+
+significant_results_metabolite_mm_df2 <- significant_results_metabolite_mm_df2 %>%
+  select(feature = metabolite_name,
+         metadata, value, coef, stderr, pval, qval, base.model, tweedie.index, N, N.not.zero, percent.zero)
+
+write.csv(x = significant_results_metabolite_mm_df2,
+          file = 'significant_results_metabolite_full_model_28Apr2024.csv',
+          row.names = FALSE)
+
+metabolite_coef_tile_plot <-
+significant_results_metabolite_mm_df2 %>%
+  ggplot() +
+  geom_tile(aes(y = feature, x = metadata, fill = coef),
+            color = 'white') +
+  scale_fill_distiller(palette = 'Spectral')
+
+ggsave('sig_metabolite_results.pdf', metabolite_coef_tile_plot,
+       height = 24)
+
+mbl_gdm_temp <- significant_results_metabolite_mm_df2 %>%
+  #mutate(abs_coef = abs(coef)) %>%
+  filter(metadata == 'mother_GDM') %>%
+  arrange(desc(coef))
+mbl_bmi_temp <- significant_results_metabolite_mm_df2 %>%
+  #mutate(abs_coef = abs(coef)) %>%
+  filter(metadata == 'mother_BMI.category') %>%
+  arrange(desc(coef))
+
+
+significant_results_metabolite_uv_df <- read.delim('results_metabolite_univariate_1_28_Apr2024/significant_results.tsv')
+all_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_28Apr2024/all_results.tsv')
+all_results_metabolite_uv_df <- read.delim('results_metabolite_univariate_1_28_Apr2024/all_results.tsv')
 ```
+
+# Comparing univariate and multivariate effect sizes
+
+## Metabolite
+
+```{r}
+results_compare_metabolite <- left_join(significant_results_metabolite_uv_df,
+                                        all_results_metabolite_mm_df,
+                                        by = c('feature', 'metadata', 'value'),
+                                        suffix = c('.uv', '.mm')) %>%
+  mutate(metadata_value = paste(metadata, '=', value))
+results_compare_microbiome <- left_join(significant_results_microbiome_uv_df,
+                                        all_results_microbiome_mm_df,
+                                        by = c('feature', 'metadata', 'value'),
+                                        suffix = c('.uv', '.mm')) %>%
+  mutate(metadata_value = paste(metadata, '=', value))
+```
+
+## Microbiome
+
+```{r}
+rcmcb <- results_compare_microbiome %>%
+  ggplot() +
+  geom_point(aes(y = feature,
+                 x = coef.uv),
+             color = 'blue',
+             position = position_nudge(y = 0.1)) +
+  geom_linerange(aes(y = feature,
+                     xmin = coef.uv - 1.96*stderr.uv,
+                     xmax = coef.uv + 1.96*stderr.uv),
+                 color = 'blue',
+             position = position_nudge(y = 0.1)) +
+  geom_point(aes(y = feature,
+                 x = coef.mm,
+                 color = pval.mm >= 0.05),
+             position = position_nudge(y = -0.1)) +
+  geom_linerange(aes(y = feature,
+                     xmin = coef.mm - 1.96*stderr.mm,
+                     xmax = coef.mm + 1.96*stderr.mm,
+                 color = pval.mm >= 0.05),
+             position = position_nudge(y = -0.1)) +
+  geom_vline(xintercept = 0, linetype = 'dashed') +
+  scale_colour_manual(values = c('FALSE' = "green", 'TRUE' = "red")) +
+    theme(legend.position = "none") + 
+  facet_wrap(~ metadata_value, ncol = 1,
+             scales = 'free')
+
+rcmcb 
+ggsave('rcmcb.pdf', rcmcb, width = 8, height = 6)
+```
+
+# Visualizations for comparisons
+
+## Metabolite forest plot
+
+```{r}
+rcmtb <- results_compare_metabolite %>%
+  ggplot() +
+  # univariate: blue
+  geom_point(aes(y = reorder(feature, coef.uv, decreasing = FALSE),
+                 x = coef.uv),
+             color = 'blue',
+             position = position_nudge(y = 0.1)) +
+  geom_linerange(aes(y = reorder(feature, coef.uv, decreasing = FALSE),
+                     xmin = coef.uv - 1.96*stderr.uv,
+                     xmax = coef.uv + 1.96*stderr.uv),
+                 color = 'blue',
+             position = position_nudge(y = 0.1)) +
+  # multivariate: red if p value is now non-significant; green if still significant
+  geom_point(aes(y = reorder(feature, coef.uv, decreasing = FALSE),
+                 x = coef.mm,
+                 color = pval.mm >= 0.05),
+             position = position_nudge(y = -0.1)) +
+  geom_linerange(aes(y = reorder(feature, coef.uv, decreasing = FALSE),
+                     xmin = coef.mm - 1.96*stderr.mm,
+                     xmax = coef.mm + 1.96*stderr.mm,
+                     color = pval.mm >= 0.05),
+             position = position_nudge(y = -0.1)) +
+  geom_vline(xintercept = 0, linetype = 'dashed') +
+  facet_wrap(~ metadata_value, ncol = 1,
+             scales = 'free') +
+  scale_colour_manual(values = c('FALSE' = "green", 'TRUE' = "red")) +
+  theme(legend.position = "none",
+        axis.text.y = element_text(size = 5))
+rcmtb
+ggsave('rcmtb.pdf', rcm, width = 8, height = 60, limitsize = FALSE)
+
+```
+
+## Metabolite Scatter (?) plot
+
+```{r}
+plot_metabolite_uv_mm <- results_compare_metabolite %>%
+  ggplot() +
+  geom_point(aes(x = coef.uv, y = coef.mm), shape = 1) +
+#  geom_text(aes(x = coef.uv, y = coef.mm, label = feature), nudge_y = 2) + 
+  geom_abline(intercept = 0, slope = 1) + 
+  ylim(-6, 70) +
+  xlim(-6, 70)
+
+plot_metabolite_uv_mm
+
+ggsave(filename = "metabolite_uv_vs_mm.pdf", plot_metabolite_uv_mm, height = 6, width = 6)
+```
+## Microbiome Scatter (?) plot
+
+```{r}
+results_compare_microbiome %>%
+  ggplot() +
+  geom_point(aes(x = coef.uv, y = coef.mm)) +
+#  geom_text(aes(x = coef.uv, y = coef.mm, label = feature), nudge_y = 2) + 
+  geom_abline(intercept = 0, slope = 1)# + 
+ # ylim(-6, 70) +
+#  xlim(-6, 70)
+```
+
+
+# Alpha diversity 
+
+## Microbiome - Infant 
+
+```{r}
+microbiome_infant_t_df <- t(microbiome_infant_df)
+infant_id <- gsub(".*?([0-9]+).*", "\\1", rownames(microbiome_infant_t_df))
+infant_id <- sprintf('X%02d', as.numeric(infant_id))
+sample_diversity <- diversity(microbiome_infant_t_df, index = "shannon", groups = infant_id)
+sample_diversity_df <- data.frame(sample_diversity, Sample_ID = names(sample_diversity))
+
+
+# Get mother metadata for each infant_id
+alpha_analysis_df <- data.frame(Sample_ID = sprintf('X%02d', metadata_mother_df$External_ID),
+                                mother_GDM = metadata_mother_df$mother_GDM,
+                                mother_BMI.category = metadata_mother_df$mother_BMI.category,
+                                mother_BMI = metadata_mother_df$mother_BMI,
+                                mother_Age = metadata_mother_df$mother_Age)
+
+alpha_analysis_df <- left_join(alpha_analysis_df, sample_diversity_df)
+
+alpha_analysis_df %>%
+  ggplot() +
+  geom_density(aes(x = sample_diversity),
+               color = 'blue',
+               fill = 'blue',
+               alpha = 0.2)
+
+alpha_analysis_df %>%
+  ggplot() +
+  geom_point(aes(x = mother_BMI,
+                 y = sample_diversity,
+                 color = mother_GDM)) +
+  geom_smooth(aes(x = mother_BMI,
+                 y = sample_diversity),
+              method = "lm")
+  
+alpha_model_multivariate <- lm(sample_diversity ~ mother_BMI + mother_Age + mother_GDM,
+                      data = alpha_analysis_df)
+summary(alpha_model_multivariate)
+
+alpha_model_GDM <- lm(sample_diversity ~ mother_GDM,
+                      data = alpha_analysis_df)
+summary(alpha_model_GDM)
+
+alpha_model_BMI <- lm(sample_diversity ~ mother_BMI,
+                      data = alpha_analysis_df)
+summary(alpha_model_BMI)
+
+alpha_model_BMI <- lm(sample_diversity ~ mother_BMI,
+                      data = alpha_analysis_df)
+summary(alpha_model_BMI)
+```
+## Microbiome - Mother 
+
+```{r}
+microbiome_mother_t_df <- t(microbiome_mother_df)
+mother_id <- gsub(".*?([0-9]+).*", "\\1", rownames(microbiome_mother_t_df))
+mother_id <- sprintf('X%02d', as.numeric(mother_id))
+sample_diversity <- diversity(microbiome_mother_t_df, index = "shannon", groups = mother_id)
+sample_diversity_df <- data.frame(sample_diversity, Sample_ID = names(sample_diversity))
+
+
+# Get mother metadata for each infant_id
+alpha_analysis_df <- data.frame(Sample_ID = sprintf('X%02d', metadata_mother_df$External_ID),
+                                mother_GDM = metadata_mother_df$mother_GDM,
+                                mother_BMI.category = metadata_mother_df$mother_BMI.category,
+                                mother_BMI = metadata_mother_df$mother_BMI,
+                                mother_Age = metadata_mother_df$mother_Age)
+
+alpha_analysis_df <- left_join(alpha_analysis_df, sample_diversity_df)
+
+alpha_analysis_df %>%
+  ggplot() +
+  geom_density(aes(x = sample_diversity),
+               color = 'blue',
+               fill = 'blue',
+               alpha = 0.2)
+
+alpha_analysis_df %>%
+  ggplot() +
+  geom_point(aes(x = mother_BMI,
+                 y = sample_diversity,
+                 color = mother_GDM)) +
+  geom_smooth(aes(x = mother_BMI,
+                 y = sample_diversity),
+              method = "lm")
+  
+alpha_model_multivariate <- lm(sample_diversity ~ mother_BMI + mother_Age + mother_GDM,
+                      data = alpha_analysis_df)
+summary(alpha_model_multivariate)
+
+# does not match paper
+alpha_model_GDM <- lm(sample_diversity ~ mother_GDM,
+                      data = alpha_analysis_df)
+summary(alpha_model_GDM)
+# 0.303 -> -log(0.303) = 1.19
+
+alpha_model_BMI <- lm(sample_diversity ~ mother_BMI,
+                      data = alpha_analysis_df)
+summary(alpha_model_BMI)
+BMI_pval <- summary(alpha_model_BMI)$coefficients[2, 4]
+-log(BMI_pval)
+
+alpha_model_BMI.category <- lm(sample_diversity ~ factor(mother_BMI.category, ordered = TRUE),
+                      data = alpha_analysis_df)
+summary(alpha_model_BMI.category)
+BMI.category_pval <- summary(alpha_model_BMI)$coefficients[2, 4]
+-log(BMI_pval)
+```
+
+
+# Table 1
+
+```{r}
+
+```
+
 
 
 ```{r}
@@ -128,9 +706,9 @@ significant_results_metabolite_df <- read.delim('results_metabolite_mixed_model_
 ```
 
 ```{r}
-# library(Maaslin2)
+library(Maaslin2)
 # 
-# metabolite_tsv_filename = 'metabolite_df.tsv'
+metabolite_tsv_filename = 'metabolite_df.tsv'
 # metadata_tsv_filename = 'metadata_df.tsv'
 # write.table(metabolite_df, file=metabolite_tsv_filename, sep='\t')
 # write.table(metadata_df, file=metadata_tsv_filename, sep='\t')

@@ -25,6 +25,7 @@ library(omicsArt)
 library(cowplot)
 library(vegan)
 library(ggcorrplot)
+library(gtsummary)
 #library(Maaslin2)
 ```
 
@@ -87,9 +88,52 @@ metadata_mother_df$mother_GDM <- factor(metadata_mother_df$mother_GDM,
                                         levels = c('No', 'Yes'),
                                         labels = c('No', 'Yes'))
 
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_Method.of.delivery = if_else(mother_Method.of.delivery =="No",
+                                             "Vaginal", "C-Section"))
+
+metadata_mother_df$mother_Method.of.delivery <- factor(metadata_mother_df$mother_Method.of.delivery,
+                                                       levels = c("Vaginal", "C-Section"),
+                                                       labels = c("Vaginal", "C-Section"))
+
+
+
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_Age.category = if_else(mother_Age < 35, 'Under 35', '35 and over'))
+
+metadata_mother_df$mother_Age.category = factor(metadata_mother_df$mother_Age.category,
+                                                levels = c('Under 35', '35 and over'),
+                                                labels = c('Under 35', '35 and over'))
+
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_Race = if_else(mother_Race %in% c("More than one race", "Other"),
+                               "Other",
+                               mother_Race))
+
+metadata_mother_df$mother_Race <- 
+  factor(metadata_mother_df$mother_Race,
+         levels = c("1", "3", "2", "Other", ""),
+         labels = c("White/Caucasian", "Black/African-American",
+                    "Asian", 
+                    "Other", "Unknown"))
+
+metadata_mother_df$mother_Maternal.smoking <-
+  factor(metadata_mother_df$mother_Maternal.smoking,
+         levels = c("2", "1"),
+         labels = c("Never Smoked",
+                    "Smoked before pregnancy"))
+
 metadata_infant_df <- metadata_infant_df %>%
   mutate(Gestational_age_at_birth_weeks_exact =
            Gestational_age_at_birth_week + Gestational_age_at_birth_day/7)
+
+metadata_infant_df$Infant_diet_at_age_of_breastmilk_sample_obtained <-
+  factor(metadata_infant_df$Infant_diet_at_age_of_breastmilk_sample_obtained,
+         levels = c(0, 1, 2, 5, 6, 7),
+         labels = c("Exclusively mother's breast milk (MBM)", "Mother's breast milk fortified with formula",
+                    "Exclusively donor breast milk (DBM)" ,"Mother's breast milk and donor breast milk",
+                    "Donor milk fortified with formula",
+                    "MBM + DBM + Fortified"))
 
 metadata_mother_df <- metadata_mother_df %>%
   mutate(mother_Parity_before = mother_Parity..after.delivery. - 1)
@@ -245,6 +289,59 @@ summary(gdm_gender_model)
 ```
 
 
+# Table 1
+
+```{r}
+metadata_single_df <- metadata_all_df %>%
+  select(External_ID, mother_Age.category,
+         mother_BMI.category, mother_GDM,
+         mother_Maternal.smoking, mother_Race,
+         #mother_Ethnicity,
+         mother_Parity_before,
+         mother_HDP = mother_Hypertensive.Disorder..PIH..preeclampsia..HELLP.,
+         mother_Abx.use.post.partum,
+         mother_Vitamins.Supplements.during.pregnancy,
+         mother_Parity..after.delivery.,
+         mother_Method.of.delivery,
+         Gender_of_child, 
+         #Infant_diet = Infant_diet_at_age_of_breastmilk_sample_obtained,
+         Gestational_age_at_birth_week) %>%
+  distinct()
+
+table1 <- metadata_single_df %>%
+  tbl_summary(include = c(mother_Age.category, mother_BMI.category,
+                          mother_Maternal.smoking, mother_Race,
+                          #mother_Ethnicity,
+                          mother_Parity_before, mother_HDP, mother_Abx.use.post.partum,
+                          mother_Vitamins.Supplements.during.pregnancy,
+                          mother_Method.of.delivery,
+                          Gender_of_child, #Infant_diet,
+                          Gestational_age_at_birth_week),
+              by = c(mother_GDM),
+              label = c(mother_Age.category = "Age (mother)",
+                        mother_BMI.category = "BMI (mother)",
+                        mother_Maternal.smoking = "Smoking",
+                        mother_Race = "Race (mother)",
+                        mother_Parity_before = "Parity",
+                        mother_Vitamins.Supplements.during.pregnancy = "Prenatal vitamin supplements",
+                        mother_Method.of.delivery = "Method of delivery",
+                        Gender_of_child = "Gender (child)",
+                        #Infant_diet = "Infant diet",
+                        Gestational_age_at_birth_week = "Gestational age at birth (weeks)",
+                        mother_HDP = "Hypertensive disorders of pregnancy (HDP)",
+                        mother_Abx.use.post.partum = "Postpartum antibiotic use"),
+              statistic = list(
+                all_continuous() ~ "{mean} ({sd})"#,
+                #all_categorical() ~ "{n} / {N} ({p}%)"
+              ),
+              digits = all_continuous() ~ 1) %>%
+  modify_header(label = "**Gestational Diabetes**") %>%
+  add_p() %>%
+  add_overall()
+  
+table1
+```
+
 # Tweedieverse
 
 ```{r}
@@ -272,10 +369,10 @@ Tweedieverse(input_features = microbiome_infant_df,
 ```{r}
 Tweedieverse(input_features = microbiome_infant_df,
              input_metadata = metadata_all_df %>%
-               select(External_ID, mother_GDM, mother_Age), 
-             fixed_effects = c('mother_GDM', 'mother_Age'), 
+               select(External_ID, mother_GDM, mother_Age.category), 
+             fixed_effects = c('mother_GDM', 'mother_Age.category'), 
              random_effects = c('External_ID'),
-             output = 'results_microbiome_mixed_model_Age_28Apr2024',
+             output = 'results_microbiome_mixed_model_Age_03May2024',
              plot_scatter = FALSE,
              plot_heatmap = FALSE,
              base_model = "CPLM",
@@ -316,10 +413,10 @@ Tweedieverse(input_features = microbiome_infant_df,
 ```{r}
 Tweedieverse(input_features = microbiome_infant_df,
              input_metadata = metadata_all_df %>%
-               select(External_ID, mother_GDM, mother_Age, mother_BMI.category, Gender_of_child), 
-             fixed_effects = c('mother_GDM', 'mother_Age', 'mother_BMI.category', 'Gender_of_child'), 
+               select(External_ID, mother_GDM, mother_Age.category, mother_BMI.category, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'mother_Age.category', 'mother_BMI.category', 'Gender_of_child'), 
              random_effects = c('External_ID'),
-             output = 'results_microbiome_mixed_model_1_28Apr2024',
+             output = 'results_microbiome_mixed_model_1_03May2024',
              plot_scatter = FALSE,
              plot_heatmap = FALSE,
              base_model = "CPLM",
@@ -347,10 +444,10 @@ Tweedieverse(input_features = metabolite_infant_df,
 ```{r}
 Tweedieverse(input_features = metabolite_infant_df,
              input_metadata = metadata_all_df %>%
-               select(External_ID, mother_GDM, mother_Age), 
-             fixed_effects = c('mother_GDM', 'mother_Age'),
+               select(External_ID, mother_GDM, mother_Age.category), 
+             fixed_effects = c('mother_GDM', 'mother_Age.category'),
              random_effects = c('External_ID'),
-             output = 'results_metabolite_mixed_model_Age_28_Apr2024',
+             output = 'results_metabolite_mixed_model_Age_03May2024',
              plot_scatter = FALSE,
              plot_heatmap = FALSE,
              base_model = "CPLM",
@@ -391,10 +488,10 @@ Tweedieverse(input_features = metabolite_infant_df,
 ```{r}
 Tweedieverse(input_features = metabolite_infant_df,
              input_metadata = metadata_all_df %>%
-               select(External_ID, mother_GDM, mother_Age, mother_BMI.category, Gender_of_child), 
-             fixed_effects = c('mother_GDM', 'mother_Age', 'mother_BMI.category', 'Gender_of_child'),
+               select(External_ID, mother_GDM, mother_Age.category, mother_BMI.category, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'mother_Age.category', 'mother_BMI.category', 'Gender_of_child'),
              random_effects = c('External_ID'),
-             output = 'results_metabolite_mixed_model_1_28_Apr2024',
+             output = 'results_metabolite_mixed_model_1_03May2024',
              plot_scatter = FALSE,
              plot_heatmap = FALSE,
              base_model = "CPLM",
@@ -424,7 +521,7 @@ significant_results_microbiome_uv_df <- read.delim('results_microbiome_univariat
 all_results_microbiome_mm_df <- read.delim('results_microbiome_mixed_model_1_28Apr2024/all_results.tsv')
 all_results_microbiome_uv_df <- read.delim('results_microbiome_univariate_1_28_Apr2024/all_results.tsv')
 
-significant_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_28_Apr2024/significant_results.tsv') 
+significant_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_03May2024/significant_results.tsv') 
 significant_results_metabolite_mm_df2 <-
   left_join(significant_results_metabolite_mm_df,
             metabolite_name_ref,
@@ -433,9 +530,14 @@ significant_results_metabolite_mm_df2 <-
 significant_results_metabolite_mm_df2 <- significant_results_metabolite_mm_df2 %>%
   select(feature = metabolite_name,
          metadata, value, coef, stderr, pval, qval, base.model, tweedie.index, N, N.not.zero, percent.zero)
+significant_results_metabolite_mm_df2$metadata <-
+  factor(significant_results_metabolite_mm_df2$metadata,
+         levels = c("Gender_of_child", "mother_Age.category", "mother_BMI.category", "mother_GDM"),
+         labels = c("Gender", "Age", "BMI", "GDM"))
+         
 
 write.csv(x = significant_results_metabolite_mm_df2,
-          file = 'significant_results_metabolite_full_model_28Apr2024.csv',
+          file = 'significant_results_metabolite_full_model_03May2024.csv',
           row.names = FALSE)
 
 metabolite_coef_tile_plot <-
@@ -443,10 +545,11 @@ significant_results_metabolite_mm_df2 %>%
   ggplot() +
   geom_tile(aes(y = feature, x = metadata, fill = coef),
             color = 'white') +
-  scale_fill_distiller(palette = 'Spectral')
+  scale_fill_distiller(palette = 'Spectral') +
+  theme(axis.text.y = element_text(size = 7.5))
 
 ggsave('sig_metabolite_results.pdf', metabolite_coef_tile_plot,
-       height = 24)
+       height = 20)
 
 mbl_gdm_temp <- significant_results_metabolite_mm_df2 %>%
   #mutate(abs_coef = abs(coef)) %>%
@@ -690,12 +793,6 @@ BMI.category_pval <- summary(alpha_model_BMI)$coefficients[2, 4]
 -log(BMI_pval)
 ```
 
-
-# Table 1
-
-```{r}
-
-```
 
 
 

@@ -18,6 +18,7 @@ library(Tweedieverse)
 #devtools::install_github('omicsEye/omicsArt', force = TRUE)
 library(tibble)
 library(dplyr)
+library(tidyr)
 library(readr)
 library(Tweedieverse)
 library(ggplot2)
@@ -75,14 +76,18 @@ metadata_mother_df <- metadata_mother_df %>% # rename BACK to External_ID (no mo
 
 metadata_mother_df <- metadata_mother_df %>%
   mutate(mother_BMI.category = case_when(#mother_BMI < 18.5 ~ "underweight",
-                                         mother_BMI < 25 ~ "underweight/normal",
-                                         mother_BMI < 30 ~ "obese",
-                                         mother_BMI >= 30 ~ "morbid obese",
+                                         mother_BMI < 25 ~ "Underweight/Normal",
+                                         mother_BMI < 30 ~ "Overweight",
+                                         mother_BMI >= 30 ~ "Obese",
                                          TRUE ~ as.character(NA)))
 
 metadata_mother_df$mother_BMI.category <- factor(metadata_mother_df$mother_BMI.category,
-                                        levels = c("underweight/normal", "obese", "morbid obese"),
-                                        labels = c("underweight/normal", "obese", "morbid obese"))
+                                        levels = c("Underweight/Normal", "Overweight", "Obese"),
+                                        labels = c("Underweight/Normal", "Overweight", "Obese"))
+
+metadata_mother_df <- metadata_mother_df %>%
+  mutate(mother_BMI.overweight = as.integer(metadata_mother_df$mother_BMI.category == "Overweight"),
+         mother_BMI.obese = as.integer(metadata_mother_df$mother_BMI.category == "Obese"))
 
 metadata_mother_df$mother_GDM <- factor(metadata_mother_df$mother_GDM,
                                         levels = c('No', 'Yes'),
@@ -342,6 +347,122 @@ table1 <- metadata_single_df %>%
 table1
 ```
 
+# Permanova tests
+
+```{r}
+metabolite_infant_t_mx <- t(metabolite_infant_df)
+metabolite_infant_t_df <- as.data.frame(metabolite_infant_t_mx)
+n_features <- nrow(metabolite_infant_df)
+# 1156 x 57
+metabolite_infant_t_df$Sample_ID = rownames(metabolite_infant_t_df)
+
+metadata_for_permanova <- metadata_all_df %>%
+  select(mother_GDM, mother_Age.category, mother_BMI.overweight, mother_BMI.obese, Gender_of_child)
+metadata_for_permanova$Sample_ID <- rownames(metadata_for_permanova) 
+
+joint_permanova_df <- left_join(metabolite_infant_t_df, metadata_for_permanova)
+rownames(joint_permanova_df) <- joint_permanova_df$Sample_ID
+
+# Only use the samples that were matched with feature data.  Overwrite metadata_for_permanova
+metadata_for_permanova <- joint_permanova_df %>%
+  select(mother_GDM, mother_Age.category, mother_BMI.overweight, mother_BMI.obese, Gender_of_child)
+
+if (all(rownames(metabolite_infant_t_mx) == rownames(joint_permanova_df))) {
+  print("Rownames match")
+}
+
+metadata_for_permanova.BMI <- joint_permanova_df %>%
+  drop_na() %>%
+  select(mother_GDM, mother_Age.category, mother_BMI.overweight, mother_BMI.obese, Gender_of_child)
+
+metabolite_infant_t_df.BMI <- joint_permanova_df %>%
+  drop_na() %>%
+  select(-c(mother_GDM, mother_Age.category, mother_BMI.overweight, mother_BMI.obese, Gender_of_child, Sample_ID))
+
+if (all(rownames(metadata_for_permanova.BMI) == rownames(metabolite_infant_t_df.BMI))) {
+  print("Rownames match")
+}
+
+metabolite_infant_t_mx.BMI <- as.matrix(metabolite_infant_t_df.BMI)
+
+adonis_GDM <- adonis2(formula = metabolite_infant_t_mx ~ mother_GDM,
+                      data = metadata_for_permanova)
+adonis_GDM
+
+adonis_Age <- adonis2(formula = metabolite_infant_t_mx ~ mother_Age.category,
+                      data = metadata_for_permanova)
+adonis_Age
+
+adonis_Gender <- adonis2(formula = metabolite_infant_t_mx ~ Gender_of_child,
+                         data = metadata_for_permanova)
+adonis_Gender
+
+adonis_BMI.overweight <- adonis2(formula = metabolite_infant_t_mx.BMI ~ mother_BMI.overweight,
+                         data = metadata_for_permanova.BMI)
+adonis_BMI.overweight
+
+adonis_BMI.obese <- adonis2(formula = metabolite_infant_t_mx.BMI ~ mother_BMI.obese,
+                         data = metadata_for_permanova.BMI)
+adonis_BMI.obese
+
+adonis_full_model <- adonis2(formula = metabolite_infant_t_mx.BMI ~ mother_GDM + mother_Age.category + mother_BMI.overweight + mother_BMI.obese + Gender_of_child,
+                         data = metadata_for_permanova.BMI)
+adonis_full_model
+```
+# PCA plot
+
+```{r}
+# Calculate column standard deviations
+col_sds <- apply(metabolite_infant_t_mx, 2, sd)
+
+# Remove columns with 0 sd
+metabolite_infant_t_mx_no_constants <- metabolite_infant_t_mx[, -which(col_sds == 0)]
+
+pca1 <- prcomp(metabolite_infant_t_mx_no_constants, center = TRUE, scale = TRUE)
+pca1_summary <- summary(pca1)$importance
+```
+
+## PCA importance plot
+```{r}
+pca_importance_df <- data.frame(PC = 1:ncol(pca1_summary), proportion_of_variance = pca1_summary[2,])
+
+pca_importance_df[1:10,] %>%
+  ggplot() +
+  geom_point(aes(x = PC, y = proportion_of_variance), size = 2) +
+  geom_line(aes(x = PC, y = proportion_of_variance), color = 'black') +
+  theme_light() +
+  ylim(0, 0.15)
+```
+
+## PCA plot
+```{r}
+pca1_data <- as.data.frame(pca1$x)
+
+pca_plot_data <- data.frame(PC1 = pca1_data$PC1, PC2 = pca1_data$PC2, GDM = metadata_for_permanova$mother_GDM)
+ggplot(data = pca_plot_data,
+       mapping = aes(x = PC1, y = PC2, color = GDM)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  # geom_point(size = 2.5, color = 'black', shape = 1) +
+  labs(color = "Mother GDM status") +
+  theme_light()
+```
+
+# Distribution of Y variables
+```{r}
+
+mb_long <- as.data.frame(metabolite_infant_t_mx_no_constants) %>%
+  #select(-Sample_ID) %>%
+  pivot_longer(cols = everything(),
+               names_to = "Metabolite")
+
+mb_long %>%
+  ggplot() +
+  geom_density(aes(x = value, color = Metabolite, fill = Metabolite), alpha = 0.25, linewidth = 0.2) +
+  xlim(0, 2) +
+  theme(legend.position = "none")
+```
+
+
 # Tweedieverse
 
 ```{r}
@@ -488,16 +609,31 @@ Tweedieverse(input_features = metabolite_infant_df,
 ```{r}
 Tweedieverse(input_features = metabolite_infant_df,
              input_metadata = metadata_all_df %>%
-               select(External_ID, mother_GDM, mother_Age.category, mother_BMI.category, Gender_of_child), 
-             fixed_effects = c('mother_GDM', 'mother_Age.category', 'mother_BMI.category', 'Gender_of_child'),
+               select(External_ID, mother_GDM, mother_Age.category, mother_BMI.overweight, mother_BMI.obese, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'mother_Age.category', 'mother_BMI.overweight', 'mother_BMI.obese', 'Gender_of_child'),
              random_effects = c('External_ID'),
-             output = 'results_metabolite_mixed_model_1_03May2024',
+             output = 'results_metabolite_mixed_model_1_05May2024',
              plot_scatter = FALSE,
              plot_heatmap = FALSE,
              base_model = "CPLM",
+             link = "log",
              cores = 4)
 ```
+## Metabolite, adjusted mixed model with identity link function
 
+```{r}
+Tweedieverse(input_features = metabolite_infant_df,
+             input_metadata = metadata_all_df %>%
+               select(External_ID, mother_GDM, mother_Age.category, mother_BMI.overweight, mother_BMI.obese, Gender_of_child), 
+             fixed_effects = c('mother_GDM', 'mother_Age.category', 'mother_BMI.overweight', 'mother_BMI.obese', 'Gender_of_child'),
+             random_effects = c('External_ID'),
+             output = 'results_metabolite_mixed_model_1_05May2024_identity',
+             plot_scatter = FALSE,
+             plot_heatmap = FALSE,
+             base_model = "CPLM",
+             link = "identity",
+             cores = 5)
+```
 
 
 ```{r}
@@ -521,7 +657,9 @@ significant_results_microbiome_uv_df <- read.delim('results_microbiome_univariat
 all_results_microbiome_mm_df <- read.delim('results_microbiome_mixed_model_1_28Apr2024/all_results.tsv')
 all_results_microbiome_uv_df <- read.delim('results_microbiome_univariate_1_28_Apr2024/all_results.tsv')
 
-significant_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_03May2024/significant_results.tsv') 
+# mixed model w/log link function
+
+significant_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_05May2024/significant_results.tsv') 
 significant_results_metabolite_mm_df2 <-
   left_join(significant_results_metabolite_mm_df,
             metabolite_name_ref,
@@ -532,12 +670,11 @@ significant_results_metabolite_mm_df2 <- significant_results_metabolite_mm_df2 %
          metadata, value, coef, stderr, pval, qval, base.model, tweedie.index, N, N.not.zero, percent.zero)
 significant_results_metabolite_mm_df2$metadata <-
   factor(significant_results_metabolite_mm_df2$metadata,
-         levels = c("Gender_of_child", "mother_Age.category", "mother_BMI.category", "mother_GDM"),
-         labels = c("Gender", "Age", "BMI", "GDM"))
-         
+         levels = c("Gender_of_child", "mother_Age.category", "mother_BMI.overweight", "mother_BMI.obese", "mother_GDM"),
+         labels = c("Gender", "Age", "BMI_OW", "BWI_OB", "GDM"))
 
 write.csv(x = significant_results_metabolite_mm_df2,
-          file = 'significant_results_metabolite_full_model_03May2024.csv',
+          file = 'significant_results_metabolite_full_model_05May2024.csv',
           row.names = FALSE)
 
 metabolite_coef_tile_plot <-
@@ -546,20 +683,78 @@ significant_results_metabolite_mm_df2 %>%
   geom_tile(aes(y = feature, x = metadata, fill = coef),
             color = 'white') +
   scale_fill_distiller(palette = 'Spectral') +
-  theme(axis.text.y = element_text(size = 7.5))
+  theme(axis.text.y = element_text(size = 7.5)) +
+  theme_light()
 
 ggsave('sig_metabolite_results.pdf', metabolite_coef_tile_plot,
        height = 20)
 
-mbl_gdm_temp <- significant_results_metabolite_mm_df2 %>%
-  #mutate(abs_coef = abs(coef)) %>%
-  filter(metadata == 'mother_GDM') %>%
-  arrange(desc(coef))
-mbl_bmi_temp <- significant_results_metabolite_mm_df2 %>%
-  #mutate(abs_coef = abs(coef)) %>%
-  filter(metadata == 'mother_BMI.category') %>%
-  arrange(desc(coef))
+significant_results_metabolite_mm_df2_wide <- significant_results_metabolite_mm_df2 %>%
+  select(feature, metadata, coef) %>%
+  pivot_wider(names_from = metadata,
+              values_from = coef)
 
+summary(significant_results_metabolite_mm_df2_wide)
+count_sig_results_df <- significant_results_metabolite_mm_df2 %>%
+  count(metadata) %>%
+  arrange(desc(n))
+count_sig_results_df 
+
+# identity link function
+
+significant_results_metabolite_mm_df_id <- read.delim('results_metabolite_mixed_model_1_05May2024_identity/significant_results.tsv') 
+significant_results_metabolite_mm_df2_id <-
+  left_join(significant_results_metabolite_mm_df_id,
+            metabolite_name_ref,
+            by = c("feature" = "clean_name"))
+
+significant_results_metabolite_mm_df2_id <- significant_results_metabolite_mm_df2_id %>%
+  select(feature = metabolite_name,
+         metadata, value, coef, stderr, pval, qval, base.model, tweedie.index, N, N.not.zero, percent.zero)
+significant_results_metabolite_mm_df2_id$metadata <-
+  factor(significant_results_metabolite_mm_df2_id$metadata,
+         levels = c("Gender_of_child", "mother_Age.category", "mother_BMI.overweight", "mother_BMI.obese", "mother_GDM"),
+         labels = c("Gender", "Age", "BMI_OW", "BWI_OB", "GDM"))
+
+write.csv(x = significant_results_metabolite_mm_df2_id,
+          file = 'significant_results_metabolite_full_model_05May2024_identity.csv',
+          row.names = FALSE)
+
+metabolite_coef_tile_plot_id <-
+significant_results_metabolite_mm_df2_id %>%
+  ggplot() +
+  geom_tile(aes(y = feature, x = metadata, fill = coef),
+            color = 'white') +
+  scale_fill_distiller(palette = 'Spectral') +
+  theme(axis.text.y = element_text(size = 7.5)) +
+  theme_light()
+
+ggsave('sig_metabolite_results_identity.pdf', metabolite_coef_tile_plot_id,
+       height = 20)
+
+mbl_gdm_coef <- significant_results_metabolite_mm_df2 %>%
+  #mutate(abs_coef = abs(coef)) %>%
+  filter(metadata == 'GDM') %>%
+  arrange(desc(coef))
+# mbl_bmi_temp <- significant_results_metabolite_mm_df2 %>%
+#   #mutate(abs_coef = abs(coef)) %>%
+#   filter(metadata == 'mother_BMI.category') %>%
+#   arrange(desc(coef))
+
+# TODO: Needs repair - do we need to exponentiate the coef, LL, UL?
+gdm_coef_plot <- mbl_gdm_coef %>%
+  ggplot() + 
+  #geom_col(aes(x = coef, y = reorder(feature, coef), fill = coef), width = 0.1) + 
+  #geom_point(aes(x = coef, y = reorder(feature, coef), color = coef)) + 
+  geom_hline(aes(xmin = coef - 1.96*stderr, xmax = coef + 1.96*stderr, yintercept = reorder(feature, coef))) + 
+  geom_point(aes(x = coef, y = reorder(feature, coef)), color = 'black', shape = 1, show.legend = FALSE) + 
+  scale_fill_distiller(palette = 'Spectral') +
+  scale_color_distiller(palette = 'Spectral') +
+  theme_light() + 
+  theme(axis.text.y = element_text(size = 6.5)) +
+  labs(y = 'Metabolite', x = 'coefficient', color = 'coefficient') 
+  
+ggsave(plot = gdm_coef_plot, filename = 'gdm_coef_plot_05May2024.pdf', height = 14, width = 8.5)
 
 significant_results_metabolite_uv_df <- read.delim('results_metabolite_univariate_1_28_Apr2024/significant_results.tsv')
 all_results_metabolite_mm_df <- read.delim('results_metabolite_mixed_model_1_28Apr2024/all_results.tsv')

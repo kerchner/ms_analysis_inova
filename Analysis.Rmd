@@ -10,6 +10,8 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Load libraries
+
 ```{r}
 #devtools::install_github("himelmallick/Tweedieverse")
 library(Tweedieverse)
@@ -26,6 +28,7 @@ library(omicsArt)
 library(cowplot)
 library(vegan)
 library(ggcorrplot)
+library(gt)
 library(gtsummary)
 #library(Maaslin2)
 ```
@@ -342,9 +345,13 @@ table1 <- metadata_single_df %>%
               digits = all_continuous() ~ 1) %>%
   modify_header(label = "**Gestational Diabetes**") %>%
   add_p() %>%
-  add_overall()
+  add_overall() %>%
+  as_gt() %>%
+  opt_vertical_padding(scale = 0.25)
   
 table1
+
+gtsave(table1, 'table1.docx')
 ```
 
 # Permanova tests
@@ -431,7 +438,8 @@ pca_importance_df[1:10,] %>%
   geom_point(aes(x = PC, y = proportion_of_variance), size = 2) +
   geom_line(aes(x = PC, y = proportion_of_variance), color = 'black') +
   theme_light() +
-  ylim(0, 0.15)
+  ylim(0, 0.15) +
+  labs(y = "Proportion of Variance")
 ```
 
 ## PCA plot
@@ -443,7 +451,7 @@ ggplot(data = pca_plot_data,
        mapping = aes(x = PC1, y = PC2, color = GDM)) +
   geom_point(size = 2.5, alpha = 0.7) +
   # geom_point(size = 2.5, color = 'black', shape = 1) +
-  labs(color = "Mother GDM status") +
+  labs(color = "Maternal GDM") +
   theme_light()
 ```
 
@@ -671,7 +679,7 @@ significant_results_metabolite_mm_df2 <- significant_results_metabolite_mm_df2 %
 significant_results_metabolite_mm_df2$metadata <-
   factor(significant_results_metabolite_mm_df2$metadata,
          levels = c("Gender_of_child", "mother_Age.category", "mother_BMI.overweight", "mother_BMI.obese", "mother_GDM"),
-         labels = c("Gender", "Age", "BMI_OW", "BWI_OB", "GDM"))
+         labels = c("Gender", "Age", "BMI_OW", "BMI_OB", "GDM")) 
 
 write.csv(x = significant_results_metabolite_mm_df2,
           file = 'significant_results_metabolite_full_model_05May2024.csv',
@@ -683,11 +691,84 @@ significant_results_metabolite_mm_df2 %>%
   geom_tile(aes(y = feature, x = metadata, fill = coef),
             color = 'white') +
   scale_fill_distiller(palette = 'Spectral') +
-  theme(axis.text.y = element_text(size = 7.5)) +
-  theme_light()
+  theme_light() +
+  theme(axis.text.y = element_text(size = 7.5),
+        axis.text.x = element_text(size = 8)) +
+  labs(fill = 'log(coefficient)')
 
 ggsave('sig_metabolite_results.pdf', metabolite_coef_tile_plot,
        height = 20)
+
+# Break plot into 3
+
+tile_plot_wide_df <- significant_results_metabolite_mm_df2 %>%
+  select(feature, metadata, coef) %>%
+  pivot_wider(names_from = metadata,
+              values_from = coef) %>%
+  mutate_all( ~replace(., lengths(.)==0, NA)) %>%
+  mutate(has_GDM = !is.na(GDM),
+         n_vars = as.numeric(!is.na(GDM)) +
+           as.numeric(!is.na(Gender)) +
+           as.numeric(!is.na(BMI_OW)) +
+           as.numeric(!is.na(BMI_OB)) +
+           as.numeric(!is.na(Age)),
+         group = case_when(has_GDM & n_vars > 1 ~ 1,
+                           has_GDM & n_vars == 1 ~ 2,
+                           TRUE ~ 3))
+
+tile_plot_long_df <- tile_plot_wide_df %>%
+  pivot_longer(cols = c(GDM, Age, Gender, BMI_OW, BMI_OB),
+               names_to = 'metadata',
+               values_to = 'coef') %>%
+  filter(!is.na(coef))
+
+tile_plot_long_df$metadata <- factor(tile_plot_long_df$metadata,
+                                     levels = c("GDM", "Gender", "Age", "BMI_OW", "BMI_OB"),
+                                     labels = c("GDM", "Gender", "Age", "BMI_OW", "BMI_OB"))
+
+metabolite_coef_tile_plot <- tile_plot_long_df %>%
+  filter(group == 1) %>%
+  ggplot() +
+  geom_tile(aes(y = feature, x = metadata, fill = coef),
+            color = 'white') +
+  scale_fill_distiller(palette = 'Spectral') +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 7.5),
+        axis.text.x = element_text(size = 7.5)) +
+  labs(fill = 'log(coefficient)') 
+
+ggsave('sig_metabolite_results_plot1.pdf', metabolite_coef_tile_plot,
+       height = 6)
+
+metabolite_coef_tile_plot <- tile_plot_long_df %>%
+  filter(group == 2) %>%
+  ggplot() +
+  geom_tile(aes(y = feature, x = metadata, fill = coef),
+            color = 'white') +
+  scale_fill_distiller(palette = 'Spectral') +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 7.5),
+        axis.text.x = element_text(size = 7.5)) +
+  labs(fill = 'log(coefficient)') 
+
+ggsave('sig_metabolite_results_plot2.pdf', metabolite_coef_tile_plot,
+       height = 18)
+
+metabolite_coef_tile_plot <- tile_plot_long_df %>%
+  filter(group == 3) %>%
+  ggplot() +
+  geom_tile(aes(y = feature, x = metadata, fill = coef),
+            color = 'white') +
+  scale_fill_distiller(palette = 'Spectral') +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 7.5),
+        axis.text.x = element_text(size = 7.5)) +
+  labs(fill = 'log(coefficient)') 
+
+ggsave('sig_metabolite_results_plot3.pdf', metabolite_coef_tile_plot,
+       height = 6)
+
+#
 
 significant_results_metabolite_mm_df2_wide <- significant_results_metabolite_mm_df2 %>%
   select(feature, metadata, coef) %>%
@@ -743,16 +824,19 @@ mbl_gdm_coef <- significant_results_metabolite_mm_df2 %>%
 
 # TODO: Needs repair - do we need to exponentiate the coef, LL, UL?
 gdm_coef_plot <- mbl_gdm_coef %>%
+  mutate(e_coef = exp(coef),
+         e_ll = exp(coef - 1.96*stderr),
+         e_ul = exp(coef + 1.96*stderr)) %>%
   ggplot() + 
   #geom_col(aes(x = coef, y = reorder(feature, coef), fill = coef), width = 0.1) + 
   #geom_point(aes(x = coef, y = reorder(feature, coef), color = coef)) + 
-  geom_hline(aes(xmin = coef - 1.96*stderr, xmax = coef + 1.96*stderr, yintercept = reorder(feature, coef))) + 
-  geom_point(aes(x = coef, y = reorder(feature, coef)), color = 'black', shape = 1, show.legend = FALSE) + 
-  scale_fill_distiller(palette = 'Spectral') +
-  scale_color_distiller(palette = 'Spectral') +
+  geom_linerange(aes(xmin = e_ll, xmax = e_ul, y = reorder(feature, e_coef))) + 
+  geom_point(aes(x = e_coef, y = reorder(feature, e_coef)), color = 'black', shape = 1, show.legend = FALSE) + 
   theme_light() + 
   theme(axis.text.y = element_text(size = 6.5)) +
-  labs(y = 'Metabolite', x = 'coefficient', color = 'coefficient') 
+  labs(y = 'Metabolite', x = 'coefficient') +
+  geom_vline(xintercept = 1, color = 'red', linetype = 'dashed') +
+  scale_x_log10(labels = scales::label_number())
   
 ggsave(plot = gdm_coef_plot, filename = 'gdm_coef_plot_05May2024.pdf', height = 14, width = 8.5)
 
